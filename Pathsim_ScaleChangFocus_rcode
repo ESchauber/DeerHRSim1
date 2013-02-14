@@ -1,0 +1,84 @@
+library(circular)
+
+# PURPOSE:  generates a simulated movement path with return tendency, based on biased random walk model parameters fitted to empirical data from white-tailed deer.  
+# Each data set (site, deer, and season) has a set of fitted model parameters.  
+# Simulation is based on the "FOCUS" turn angle model and "Scale Changing" step length model described in manuscript Kjaer and Schauber "Path-Based modeling of Home Range Behavior for Individual-Based Simulation:  White-tailed Deer in Forested and Agricultural Landscapes" being considered for publication
+
+
+# read in fitted parameter values, indexed by site, season, and deer
+deer <- read.table("Fitted_parameters.csv", header = TRUE, sep=",")
+
+# excludes datasets with missing parameter values
+deer1 <- subset(deer, Simple_rho != "NA")
+
+attach(deer1)
+
+# creates a matrix variable "deciles" to contain 10th percentile, 20th, etc. for displacement distances for each data set
+deciles <- matrix(data = 0,nrow = nrow(deer1),nc = 9)
+colnames(deciles) <- c("10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%")
+
+# for each dataset (study site, season, and deer) in the deer1 data frame, simulates a 5000-step movement path
+for (j in 1:nrow(deer1)) {
+
+  # Simulate random walk using the Scale-Changing step model and FOCUS turn model
+	# Phi = absolute direction of travel (NOT turn angle)
+	# For a strongly biased random walk:  Phi -> angle to origin
+
+	N <- 5000	# length of path
+
+	# initialize location variables
+	x <- numeric(N)
+	y <- numeric(N)
+	disp <- numeric(N)
+	
+	#first two random locations and a random starting direction
+	x[1] <- rnorm(1,0,100)
+	y[1] <- rnorm(1,0,100)
+	disp[1] <- sqrt(x[1]^2 + y[1]^2)
+	Phi <- rwrappedcauchy(1,0,0)
+
+	for (i in 2:N){
+
+		# select Weibull distributed step
+		# "Scale Changing" model uses a linear change (slope, intercept) in the Weibull scale parameter with displacement from the home range center
+		# rweibull(n, shape, scale) generates n weibull random deviates
+		shape <- ScaleChang_Shape[j]
+		scale <- ScaleChang_ScaleInt[j] + ScaleChang_ScaleSlope[j]*disp[i-1]
+		step <- rweibull(1, shape, scale)
+
+		# select wrapped cauchy distributed angle
+		# "FOCUS" model of turn angles uses a wrapped Cauchy distribution with central angle = angle to center and mean cosine of deviation from the central angle converging exponentially with displacement, from rho0 at the center to rhoinf at displacement --> infinity
+		# rwrappedcauchy(n,mu,rho) generates n wrapped Cauchy random deviates
+		# in FOCUS:  mu = angle back to center 
+		mu <- atan2(y[i-1],x[i-1])+ pi
+		rho <- Focus_rhoinf[j] + (Focus_rho0[j] - Focus_rhoinf[j]) * exp(-Focus_gammarho[j] * disp[i-1])
+		
+		#corrects cases of negative rho
+		if (rho < 0) {
+			rho = -rho
+			mu = mu + pi
+		}
+		Phi <- rwrappedcauchy(1,mu,rho)
+
+		# Generate next location & calculate displacement from origin (centroid)
+		x[i] <- x[i-1] + step*cos(Phi)
+		y[i] <- y[i-1] + step*sin(Phi)
+		disp[i] <- sqrt(x[i]^2+y[i]^2)
+	}
+
+
+  	plot(x,y,main=paste(Site[j], Season[j], Deer[j], sep=" "))
+
+	deciles[j,] <- quantile(disp, seq(0.1, 0.9, 0.1))
+}
+
+# this function allows user to select which data frame columns to keep
+keepCols <- function(data, cols){
+return(data[,names(data) %in% cols]) }
+
+# output results
+deer2 <- cbind(keepCols(deer1, c("Site", "Season", "Deer")), deciles)
+write.csv(deer2, file="PathSim_ScaleChangFocus_deciles.csv")
+
+
+
